@@ -11,7 +11,7 @@ namespace ObenseuerQualityOfLife
     {
         public const string PLUGIN_GUID = "com.Pokka.ObenseuerQualityOfLife";
         public const string PLUGIN_NAME = "ObenseuerQualityOfLife";
-        public const string PLUGIN_VERSION = "1.0.11";
+        public const string PLUGIN_VERSION = "1.0.12";
         
         public static bool showHighlight = false;
         public static bool showShopsList = false;
@@ -40,6 +40,7 @@ namespace ObenseuerQualityOfLife
             Harmony.CreateAndPatchAll(typeof(ToolTip_ConstructDataString_Patch));
             Harmony.CreateAndPatchAll(typeof(ItemData_Click_Patch));
             Harmony.CreateAndPatchAll(typeof(CategoryTitle_Init_Patch));
+            Harmony.CreateAndPatchAll(typeof(MouseLook_Patch));
 
             GameObject menuObj = new GameObject("ObenseuerQualityOfLifeMenu");
             menuObj.AddComponent<MenuComponent>();
@@ -48,10 +49,13 @@ namespace ObenseuerQualityOfLife
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
         }
 
+        private bool _watcherAdded = false;
+
         private void OnSceneLoaded(UnityEngine.SceneManagement.Scene Scene, UnityEngine.SceneManagement.LoadSceneMode mode)
         {
             Patches.ScanForShops();
             Patches.ScanForScheduledDoors();
+            _watcherAdded = false;
         }
 
         public static bool showTechnicalTooltip = false;
@@ -86,12 +90,13 @@ namespace ObenseuerQualityOfLife
                 }
             }
 
-            if (Inventory.instance != null && Inventory.instance.inventoryPanelUI != null)
+            if (!_watcherAdded && Inventory.instance != null && Inventory.instance.inventoryPanelUI != null)
             {
                 if (Inventory.instance.inventoryPanelUI.GetComponent<InventoryWatcher>() == null)
                 {
                     Inventory.instance.inventoryPanelUI.gameObject.AddComponent<InventoryWatcher>();
                 }
+                _watcherAdded = true;
             }
         }
 

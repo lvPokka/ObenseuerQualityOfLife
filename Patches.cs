@@ -10,42 +10,55 @@ namespace ObenseuerQualityOfLife
     [HarmonyPatch(typeof(ItemData))]
     public static class Patches
     {
+        // Кэш для подсветки. Автоматически очищается, когда объект ItemData уничтожается игрой.
+        private static System.Runtime.CompilerServices.ConditionalWeakTable<ItemData, Image> _cachedHighlights = new System.Runtime.CompilerServices.ConditionalWeakTable<ItemData, Image>();
+
         [HarmonyPatch("UpdateItem")]
         [HarmonyPostfix]
         public static void UpdateItem_Postfix(ItemData __instance)
         {
             if (__instance.item == null) return;
             
-            // Находим или создаем наш собственный объект подсветки,
-            // чтобы вообще не трогать оригинальную игровую логику
-            Transform priceHighlightTransform = __instance.transform.Find("PriceHighlight");
-            GameObject priceHighlightObj;
-            Image priceHighlightImg;
+            Image priceHighlightImg = null;
 
-            if (priceHighlightTransform == null)
+            // Пытаемся быстро получить закэшированный Image за O(1)
+            // Если в кэше пусто или старый объект был удален движком Unity (стал null), создаем заново
+            if (!_cachedHighlights.TryGetValue(__instance, out priceHighlightImg) || priceHighlightImg == null)
             {
-                priceHighlightObj = new GameObject("PriceHighlight");
-                priceHighlightObj.transform.SetParent(__instance.transform, false);
+                Transform priceHighlightTransform = __instance.transform.Find("PriceHighlight");
+                GameObject priceHighlightObj;
+
+                if (priceHighlightTransform == null)
+                {
+                    priceHighlightObj = new GameObject("PriceHighlight");
+                    priceHighlightObj.transform.SetParent(__instance.transform, false);
+                    
+                    priceHighlightImg = priceHighlightObj.AddComponent<Image>();
+                    
+                    // Настраиваем RectTransform чтобы это была полоска снизу
+                    RectTransform rect = priceHighlightObj.GetComponent<RectTransform>();
+                    rect.anchorMin = new Vector2(0.1f, 0); // Левый нижний угол
+                    rect.anchorMax = new Vector2(0.9f, 0); // Правый нижний угол
+                    rect.pivot = new Vector2(0.5f, 0);
+                    rect.sizeDelta = new Vector2(0, 2); // Высота полоски 2 пикселя
+                    rect.anchoredPosition = new Vector2(0, 1); // Чуть приподнимем
+                }
+                else
+                {
+                    priceHighlightObj = priceHighlightTransform.gameObject;
+                    priceHighlightImg = priceHighlightObj.GetComponent<Image>();
+                }
                 
-                priceHighlightImg = priceHighlightObj.AddComponent<Image>();
-                
-                // Настраиваем RectTransform чтобы это была полоска снизу
-                RectTransform rect = priceHighlightObj.GetComponent<RectTransform>();
-                rect.anchorMin = new Vector2(0.1f, 0); // Левый нижний угол (чуть отступаем от края)
-                rect.anchorMax = new Vector2(0.9f, 0); // Правый нижний угол (чуть отступаем от края)
-                rect.pivot = new Vector2(0.5f, 0);
-                rect.sizeDelta = new Vector2(0, 2); // Высота полоски всего 2 пикселя
-                rect.anchoredPosition = new Vector2(0, 1); // Чуть приподнимем над самым низом
+                // Обновляем кэш
+                _cachedHighlights.Remove(__instance);
+                _cachedHighlights.Add(__instance, priceHighlightImg);
             }
-            else
-            {
-                priceHighlightObj = priceHighlightTransform.gameObject;
-                priceHighlightImg = priceHighlightObj.GetComponent<Image>();
-            }
+
+            GameObject imgObj = priceHighlightImg.gameObject;
 
             if (!Plugin.showHighlight)
             {
-                priceHighlightObj.SetActive(false);
+                if (imgObj.activeSelf) imgObj.SetActive(false);
                 return;
             }
 
@@ -53,23 +66,22 @@ namespace ObenseuerQualityOfLife
             
             if (price >= Plugin.MinRedPrice.Value)
             {
-                priceHighlightObj.SetActive(true);
+                if (!imgObj.activeSelf) imgObj.SetActive(true);
                 priceHighlightImg.color = Color.red;
             }
             else if (price >= Plugin.MinBluePrice.Value && price < Plugin.MinRedPrice.Value)
             {
-                priceHighlightObj.SetActive(true);
+                if (!imgObj.activeSelf) imgObj.SetActive(true);
                 priceHighlightImg.color = Color.blue;
             }
             else if (price >= Plugin.MinGreenPrice.Value && price < Plugin.MinBluePrice.Value)
             {
-                priceHighlightObj.SetActive(true);
+                if (!imgObj.activeSelf) imgObj.SetActive(true);
                 priceHighlightImg.color = Color.green;
             }
             else
             {
-                // Скрываем если цена ниже зеленого порога
-                priceHighlightObj.SetActive(false); 
+                if (imgObj.activeSelf) imgObj.SetActive(false); 
             }
         }
 
@@ -80,6 +92,28 @@ namespace ObenseuerQualityOfLife
             public string sceneName = "Unknown";
             public string customName = "";
             public bool isVisible = false;
+
+            // Runtime-only (не сохраняется в кэш): объекты в текущей сцене и расстояние до игрока
+            public List<Transform> anchors = new List<Transform>();
+            public float distance = -1f;
+
+            public void AddAnchor(Transform t)
+            {
+                anchors.RemoveAll(a => a == null);
+                if (t != null && !anchors.Contains(t)) anchors.Add(t);
+            }
+
+            public void UpdateDistance(Vector3 playerPos)
+            {
+                anchors.RemoveAll(a => a == null);
+                float best = -1f;
+                foreach (var a in anchors)
+                {
+                    float d = Vector3.Distance(playerPos, a.position);
+                    if (best < 0f || d < best) best = d;
+                }
+                distance = best;
+            }
             
             public ShopSchedule() { }
 
@@ -294,9 +328,12 @@ namespace ObenseuerQualityOfLife
                 string n = tuple.Item2;
                 ShopSchedule sched = tuple.Item3;
 
+                if (knownShops.TryGetValue(n, out var knownExisting)) knownExisting.AddAnchor(comp.transform);
+
                 if (!knownShops.ContainsKey(n))
                 {
                     knownShops[n] = sched;
+                    sched.AddAnchor(comp.transform);
                     
                     OpeningTimes correctOt = null;
                     UnityEngine.Transform current = comp.transform;
@@ -445,10 +482,14 @@ namespace ObenseuerQualityOfLife
                 
                 doorName += " (Door)";
                 
+                Transform doorAnchor = (comp.GetComponentInParent<Door>() ?? comp.GetComponentInChildren<Door>())?.transform ?? comp.transform;
+                if (knownShops.TryGetValue(doorName, out var knownDoor)) knownDoor.AddAnchor(doorAnchor);
+
                 if (!knownShops.ContainsKey(doorName))
                 {
                     ShopSchedule sched = new ShopSchedule();
                     sched.sceneName = comp.gameObject.scene.name;
+                    sched.AddAnchor(doorAnchor);
                     
                     sched.opens[0] = ot.opensOnMonday; sched.closes[0] = ot.closesOnMonday;
                     sched.opens[1] = ot.opensOnTuesday; sched.closes[1] = ot.closesOnTuesday;
@@ -491,11 +532,35 @@ namespace ObenseuerQualityOfLife
         }
 
 
+        private static int distDay = -1, distHour = -1, distMinute = -1;
+
+        // Пересчитывает расстояние до магазинов/дверей раз в игровую минуту (или принудительно)
+        public static void UpdateDistances(bool force)
+        {
+            try
+            {
+                if (TimeOfDayAzure.instance == null || PlayerLocator.instance == null) return;
+                int d = TimeOfDayAzure.instance.currentTimeAndDay.weekDay;
+                int h = (int)TimeOfDayAzure.instance.CurrentHours;
+                int m = (int)TimeOfDayAzure.instance.CurrentMinutes;
+                if (!force && d == distDay && h == distHour && m == distMinute) return;
+                distDay = d; distHour = h; distMinute = m;
+
+                Vector3 pos = PlayerLocator.instance.transform.position;
+                foreach (var kvp in knownShops) kvp.Value.UpdateDistance(pos);
+            }
+            catch (System.Exception e) { Plugin.Log.LogWarning($"[ObenseuerQualityOfLife] UpdateDistances: {e.Message}"); }
+        }
+
         private static int lastUpdateDay = -1;
         private static int lastUpdateHour = -1;
         private static int lastUpdateMinute = -1;
         private static string lastShopsText = "";
         public static string DisplayShopsText = "";
+        
+        private static FieldInfo _timeField = null;
+        private static System.Runtime.CompilerServices.ConditionalWeakTable<ShowTime, TMP_Text> _cachedClocks = new System.Runtime.CompilerServices.ConditionalWeakTable<ShowTime, TMP_Text>();
+        private static System.Runtime.CompilerServices.ConditionalWeakTable<ShowTime, object> _ignoredClocks = new System.Runtime.CompilerServices.ConditionalWeakTable<ShowTime, object>();
 
         [HarmonyPatch(typeof(ShowTime), "UpdateTime")]
         [HarmonyPostfix]
@@ -505,22 +570,77 @@ namespace ObenseuerQualityOfLife
             {
                 LoadCache();
                 cacheLoaded = true;
-                ScanForShops(); // Делаем первое сканирование при загрузке
+                ScanForShops(); 
                 ScanForScheduledDoors();
             }
-            
-            FieldInfo timeField = typeof(ShowTime).GetField("time", BindingFlags.NonPublic | BindingFlags.Instance);
-            FieldInfo timeMeshField = typeof(ShowTime).GetField("timeMesh", BindingFlags.NonPublic | BindingFlags.Instance);
 
-            var timeObj = timeField?.GetValue(__instance);
-            var timeMeshObj = timeMeshField?.GetValue(__instance);
+            UpdateDistances(false);
 
-            if (timeObj == null && timeMeshObj == null)
+            // Быстрый выход для не-UI часов, чтобы не тратить ресурсы
+            if (_ignoredClocks.TryGetValue(__instance, out _))
             {
                 return;
             }
 
-            string shopsText = "";
+            TMP_Text shopsTmp = null;
+
+            // Пытаемся быстро найти наш UI элемент расписания за O(1)
+            if (!_cachedClocks.TryGetValue(__instance, out shopsTmp) || shopsTmp == null)
+            {
+                if (_timeField == null)
+                {
+                    _timeField = typeof(ShowTime).GetField("time", BindingFlags.NonPublic | BindingFlags.Instance);
+                }
+
+                var timeObj = _timeField?.GetValue(__instance);
+                
+                // Если это 3D-часы на стене (не UI), мы их игнорируем навсегда
+                if (timeObj == null)
+                {
+                    _ignoredClocks.Add(__instance, null);
+                    return; 
+                }
+
+                Transform shopsUITransform = __instance.transform.Find("ShopsScheduleUI");
+                TMP_Text originalTmp = (TMP_Text)timeObj;
+
+                if (shopsUITransform == null)
+                {
+                    GameObject shopsUI = new GameObject("ShopsScheduleUI");
+                    shopsUI.transform.SetParent(__instance.transform, false);
+                    
+                    var rect = shopsUI.AddComponent<RectTransform>();
+                    RectTransform origRect = __instance.GetComponent<RectTransform>();
+                    if (origRect != null)
+                    {
+                        rect.anchorMin = new Vector2(1f, 0); 
+                        rect.anchorMax = new Vector2(1f, 0);
+                        rect.pivot = new Vector2(1f, 1); 
+                        rect.anchoredPosition = new Vector2(-20, -5); 
+                        rect.sizeDelta = new Vector2(500, 200);
+                    }
+                    
+                    shopsTmp = shopsUI.AddComponent<TextMeshProUGUI>();
+
+                    shopsTmp.font = originalTmp.font;
+                    shopsTmp.fontSize = originalTmp.fontSize * 0.6f;
+                    shopsTmp.color = originalTmp.color;
+                    shopsTmp.alignment = TextAlignmentOptions.TopRight;
+                    shopsTmp.overflowMode = TextOverflowModes.Overflow;
+                    shopsTmp.enableWordWrapping = false;
+                    
+                    Plugin.Log.LogInfo($"[ObenseuerQualityOfLife] Created ShopsScheduleUI successfully on {__instance.transform.root.name}'s clock.");
+                }
+                else
+                {
+                    shopsTmp = shopsUITransform.GetComponent<TMP_Text>();
+                }
+
+                _cachedClocks.Remove(__instance);
+                _cachedClocks.Add(__instance, shopsTmp);
+            }
+
+            // Быстрые проверки состояний экрана, не требующие рефлексии
             bool isWaitScreen = __instance.name.ToLower().Contains("wait") || 
                                 __instance.name.ToLower().Contains("sleep") || 
                                 __instance.name.ToLower().Contains("skip") ||
@@ -529,17 +649,22 @@ namespace ObenseuerQualityOfLife
             if (WaitingUI.instance != null && WaitingUI.instance.waitingUIisVisible) isWaitScreen = true;
             if (WaitingController.instance != null && (WaitingController.instance.IsWaiting || WaitingController.instance.IsSleeping)) isWaitScreen = true;
                                 
-            if (Plugin.showShopsList && !isWaitScreen)
+            if (!Plugin.showShopsList || isWaitScreen)
             {
-                int currentDay = TimeOfDayAzure.instance.currentTimeAndDay.weekDay;
-                float currentHour = TimeOfDayAzure.instance.currentTimeAndDay.hours;
-                int currentH = (int)TimeOfDayAzure.instance.CurrentHours;
-                int currentM = (int)TimeOfDayAzure.instance.CurrentMinutes;
+                shopsTmp.text = "";
+                return;
+            }
 
-                if (currentDay != lastUpdateDay || currentH != lastUpdateHour || currentM != lastUpdateMinute)
-                {
-                    bool foundAny = false;
-                    Dictionary<string, System.Text.StringBuilder> groupedText = new Dictionary<string, System.Text.StringBuilder>();
+            int currentDay = TimeOfDayAzure.instance.currentTimeAndDay.weekDay;
+            float currentHour = TimeOfDayAzure.instance.currentTimeAndDay.hours;
+            int currentH = (int)TimeOfDayAzure.instance.CurrentHours;
+            int currentM = (int)TimeOfDayAzure.instance.CurrentMinutes;
+
+            // Строим текст только если изменилась хотя бы 1 минута в игре
+            if (currentDay != lastUpdateDay || currentH != lastUpdateHour || currentM != lastUpdateMinute)
+            {
+                bool foundAny = false;
+                Dictionary<string, System.Text.StringBuilder> groupedText = new Dictionary<string, System.Text.StringBuilder>();
 
                 foreach(var kvp in knownShops)
                 {
@@ -626,100 +751,27 @@ namespace ObenseuerQualityOfLife
                     groupedText[times.sceneName].Append(shopLine);
                 }
 
-                    if (!foundAny) 
-                    {
-                        lastShopsText = "";
-                    }
-                    else
-                    {
-                        System.Text.StringBuilder shopsTextBuilder = new System.Text.StringBuilder();
-                        foreach(var kvp in groupedText)
-                        {
-                            shopsTextBuilder.AppendLine($"<color=yellow>--- {kvp.Key} ---</color>");
-                            shopsTextBuilder.Append(kvp.Value.ToString());
-                        }
-                        shopsText = shopsTextBuilder.ToString();
-                        lastShopsText = shopsText;
-                    }
-
-                    lastUpdateDay = currentDay;
-                    lastUpdateHour = currentH;
-                    lastUpdateMinute = currentM;
-                }
-
-                shopsText = lastShopsText;
-                shopsText = lastShopsText;
-            }
-
-            bool isUGUI = timeField?.GetValue(__instance) != null;
-            
-            // Если это 3D-часы на стене (не UI), мы их игнорируем!
-            // Расписание будет отображаться только на UI-часах игрока (в инвентаре/на экране)
-            if (!isUGUI)
-            {
-                return;
-            }
-
-            // Ищем объект по имени
-            Transform shopsUITransform = __instance.transform.Find("ShopsScheduleUI");
-            TMP_Text shopsTmp = null;
-
-            TMP_Text originalTmp = (TMP_Text)timeField.GetValue(__instance);
-
-            if (shopsUITransform == null)
-            {
-                GameObject shopsUI = new GameObject("ShopsScheduleUI");
-                shopsUI.transform.SetParent(__instance.transform, false);
-                
-                if (isUGUI)
+                if (!foundAny) 
                 {
-                    var rect = shopsUI.AddComponent<RectTransform>();
-                    RectTransform origRect = __instance.GetComponent<RectTransform>();
-                    if (origRect != null)
-                    {
-                        rect.anchorMin = new Vector2(1f, 0); // Правый нижний угол часов
-                        rect.anchorMax = new Vector2(1f, 0);
-                        rect.pivot = new Vector2(1f, 1); // Точка отсчета - верхний правый угол, чтобы текст рос влево и вниз
-                        // Сдвигаем немного вниз и влево (отступ от правого края)
-                        rect.anchoredPosition = new Vector2(-20, -5); 
-                        rect.sizeDelta = new Vector2(500, 200);
-                    }
-                    
-                    shopsTmp = shopsUI.AddComponent<TextMeshProUGUI>();
+                    lastShopsText = "";
                 }
                 else
                 {
-                    // Поднимаем чуть выше чтобы не перекрывать циферблат
-                    shopsUI.transform.localPosition = new Vector3(0, -0.2f, 0);
-                    shopsTmp = shopsUI.AddComponent<TextMeshPro>();
+                    System.Text.StringBuilder shopsTextBuilder = new System.Text.StringBuilder();
+                    foreach(var kvp in groupedText)
+                    {
+                        shopsTextBuilder.AppendLine($"<color=yellow>--- {kvp.Key} ---</color>");
+                        shopsTextBuilder.Append(kvp.Value.ToString());
+                    }
+                    lastShopsText = shopsTextBuilder.ToString();
                 }
 
-                shopsTmp.font = originalTmp.font;
-                shopsTmp.fontSize = originalTmp.fontSize * 0.6f;
-                shopsTmp.color = originalTmp.color;
-                // Выравниваем текст по правому верхнему краю, чтобы он рос влево (внутрь экрана) и не вылезал за рамки
-                shopsTmp.alignment = TextAlignmentOptions.TopRight;
-                shopsTmp.overflowMode = TextOverflowModes.Overflow;
-                shopsTmp.enableWordWrapping = false;
-                
-                Plugin.Log.LogInfo($"[ObenseuerQualityOfLife] Created ShopsScheduleUI successfully on {__instance.transform.root.name}'s clock.");
-            }
-            else
-            {
-                shopsTmp = shopsUITransform.GetComponent<TMP_Text>();
+                lastUpdateDay = currentDay;
+                lastUpdateHour = currentH;
+                lastUpdateMinute = currentM;
             }
 
-            if (shopsTmp != null)
-            {
-                if (isWaitScreen || !Plugin.showShopsList) 
-                {
-                    shopsTmp.text = "";
-                }
-                else 
-                {
-                    shopsTmp.text = shopsText.TrimEnd('\n');
-                }
-            }
+            shopsTmp.text = lastShopsText.TrimEnd('\n');
         }
     }
 
@@ -1088,9 +1140,13 @@ namespace ObenseuerQualityOfLife
                 ToolTip.instance.currentItem = itemData.item;
             }
         }
-        [HarmonyPatch("ECM.Components.MouseLook", "LookRotation")]
+    }
+
+    [HarmonyPatch(typeof(ECM.Components.MouseLook), "LookRotation")]
+    public static class MouseLook_Patch
+    {
         [HarmonyPrefix]
-        public static bool MouseLook_LookRotation_Prefix()
+        public static bool Prefix()
         {
             if (MenuComponent.IsMenuOpen)
             {
@@ -1104,6 +1160,11 @@ namespace ObenseuerQualityOfLife
     public static class CategoryTitle_Init_Patch
     {
         private static TaskItem[] allTaskItems = null;
+        private static MethodInfo _getItemTypeMethod = null;
+        
+        // Кэши для хранения подсчитанных total значений, чтобы не гонять циклы и рефлексию каждый раз
+        private static System.Collections.Generic.Dictionary<TaskItem.Type, int> _recipeTotalCache = new System.Collections.Generic.Dictionary<TaskItem.Type, int>();
+        private static System.Collections.Generic.Dictionary<TaskItem.Type, int> _taskItemTotalCache = new System.Collections.Generic.Dictionary<TaskItem.Type, int>();
 
         [HarmonyPostfix]
         public static void Postfix(CategoryTitle __instance, TaskItem.Type itemType, string title)
@@ -1116,29 +1177,45 @@ namespace ObenseuerQualityOfLife
             {
                 if (RecipeDatabase.instance != null && RecipeController.instance != null)
                 {
-                    MethodInfo getItemTypeMethod = typeof(RecipeController).GetMethod("GetItemType", BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (getItemTypeMethod != null)
+                    if (_getItemTypeMethod == null)
                     {
-                        foreach (var r in RecipeDatabase.Recipes)
+                        _getItemTypeMethod = typeof(RecipeController).GetMethod("GetItemType", BindingFlags.NonPublic | BindingFlags.Instance);
+                    }
+
+                    if (_getItemTypeMethod != null)
+                    {
+                        // Если мы еще не считали total для этой категории рецептов - считаем и кэшируем
+                        if (!_recipeTotalCache.TryGetValue(itemType, out total))
                         {
-                            if (r != null)
+                            total = 0;
+                            object[] args = new object[1];
+                            foreach (var r in RecipeDatabase.Recipes)
                             {
-                                TaskItem.Type rType = (TaskItem.Type)getItemTypeMethod.Invoke(RecipeController.instance, new object[] { r.Type });
-                                if (rType == itemType)
+                                if (r != null)
                                 {
-                                    total++;
-                                    isRecipeCategory = true;
+                                    args[0] = r.Type;
+                                    TaskItem.Type rType = (TaskItem.Type)_getItemTypeMethod.Invoke(RecipeController.instance, args);
+                                    if (rType == itemType)
+                                    {
+                                        total++;
+                                    }
                                 }
                             }
+                            _recipeTotalCache[itemType] = total;
                         }
-
-                        if (isRecipeCategory)
+                        
+                        if (total > 0)
                         {
+                            isRecipeCategory = true;
+                            
+                            // Подсчет только изученных рецептов - их меньше, но все равно используем 1 массив args
+                            object[] learnedArgs = new object[1];
                             foreach (var r in RecipeController.instance.GetAllRecipes())
                             {
                                 if (r != null)
                                 {
-                                    TaskItem.Type rType = (TaskItem.Type)getItemTypeMethod.Invoke(RecipeController.instance, new object[] { r.Type });
+                                    learnedArgs[0] = r.Type;
+                                    TaskItem.Type rType = (TaskItem.Type)_getItemTypeMethod.Invoke(RecipeController.instance, learnedArgs);
                                     if (rType == itemType)
                                     {
                                         learned++;
@@ -1156,21 +1233,27 @@ namespace ObenseuerQualityOfLife
 
             if (!isRecipeCategory)
             {
-                if (allTaskItems == null)
+                // Кэшируем total для обычных TaskItem
+                if (!_taskItemTotalCache.TryGetValue(itemType, out total))
                 {
-                    allTaskItems = Resources.LoadAll<TaskItem>("");
-                    if (allTaskItems == null || allTaskItems.Length == 0)
+                    total = 0;
+                    if (allTaskItems == null)
                     {
-                        allTaskItems = Resources.FindObjectsOfTypeAll<TaskItem>();
+                        allTaskItems = Resources.LoadAll<TaskItem>("");
+                        if (allTaskItems == null || allTaskItems.Length == 0)
+                        {
+                            allTaskItems = Resources.FindObjectsOfTypeAll<TaskItem>();
+                        }
                     }
-                }
 
-                if (allTaskItems != null)
-                {
-                    foreach (var t in allTaskItems)
+                    if (allTaskItems != null)
                     {
-                        if (t != null && t.itemType == itemType) total++;
+                        foreach (var t in allTaskItems)
+                        {
+                            if (t != null && t.itemType == itemType) total++;
+                        }
                     }
+                    _taskItemTotalCache[itemType] = total;
                 }
                 
                 if (TaskItemsManager.instance != null && TaskItemsManager.instance.taskItems != null)
@@ -1185,7 +1268,7 @@ namespace ObenseuerQualityOfLife
                 }
             }
 
-            Plugin.Log.LogInfo($"[CategoryTitle_Init] Type: {itemType}, Title: {title}, Learned: {learned}, Total: {total}");
+            // Plugin.Log.LogInfo($"[CategoryTitle_Init] Type: {itemType}, Title: {title}, Learned: {learned}, Total: {total}"); // Лучше закомментировать для продакшена
 
             if (total > 0 || learned > 0)
             {

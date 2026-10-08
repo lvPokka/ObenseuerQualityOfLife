@@ -13,6 +13,74 @@ namespace ObenseuerQualityOfLife
         private string blueText;
         private string redText;
 
+        private CursorLockMode _prevLock;
+        private bool _prevVisible;
+        private bool _savedCursor;
+        private bool _prevMenuEnabled;
+
+        private void LateUpdate()
+        {
+            if (!_show) return;
+            SetGameInputBlocked(true);
+
+            if ((int)Cursor.lockState != 0)
+            {
+                Cursor.lockState = (CursorLockMode)0;
+            }
+            if (!Cursor.visible)
+            {
+                Cursor.visible = true;
+            }
+            try
+            {
+                if (ThirdPersonCameraController.instance != null && !ThirdPersonCameraController.instance.menuEnabled)
+                {
+                    ThirdPersonCameraController.instance.menuEnabled = true;
+                }
+            }
+            catch { }
+        }
+
+        // IMGUI не блокирует uGUI-клики, поэтому отключаем EventSystem игры, пока меню открыто
+        private static UnityEngine.EventSystems.EventSystem _blockedEs;
+
+        private static void SetGameInputBlocked(bool blocked)
+        {
+            try
+            {
+                if (blocked)
+                {
+                    var es = UnityEngine.EventSystems.EventSystem.current;
+                    if (es != null)
+                    {
+                        _blockedEs = es;
+                        es.enabled = false;
+                    }
+                }
+                else if (_blockedEs != null)
+                {
+                    _blockedEs.enabled = true;
+                    _blockedEs = null;
+                }
+            }
+            catch { }
+        }
+
+        private void OnDisable()
+        {
+            SetGameInputBlocked(false);
+        }
+
+        private void RestoreCursor()
+        {
+            if (_savedCursor)
+            {
+                Cursor.lockState = _prevLock;
+                Cursor.visible = _prevVisible;
+                _savedCursor = false;
+            }
+        }
+
         private void Start()
         {
             greenText = Plugin.MinGreenPrice.Value.ToString();
@@ -34,11 +102,34 @@ namespace ObenseuerQualityOfLife
                         Patches.cacheLoaded = true;
                     }
                     
-                    if (GameController.instance != null)
+                    _prevLock = Cursor.lockState;
+                    _prevVisible = Cursor.visible;
+                    _savedCursor = true;
+                    Cursor.lockState = (CursorLockMode)0;
+                    Cursor.visible = true;
+                    SetGameInputBlocked(true);
+                    Patches.UpdateDistances(true);
+                    
+                    try
                     {
-                        GameController.instance.ControlsDisabled(this.gameObject, true, false);
+                        if (GameController.instance != null)
+                        {
+                            GameController.instance.ChangeCursorStatus((CursorLockMode)0, visible: true);
+                        }
                     }
-                    Time.timeScale = 0f;
+                    catch { }
+                    
+                    try
+                    {
+                        if (ThirdPersonCameraController.instance != null)
+                        {
+                            _prevMenuEnabled = ThirdPersonCameraController.instance.menuEnabled;
+                            ThirdPersonCameraController.instance.menuEnabled = true;
+                        }
+                    }
+                    catch { }
+
+
                     
                     // Обновляем текст из конфига при открытии меню
                     greenText = Plugin.MinGreenPrice.Value.ToString();
@@ -47,12 +138,28 @@ namespace ObenseuerQualityOfLife
                 }
                 else
                 {
-                    Time.timeScale = 1f;
+                    RestoreCursor();
+                    SetGameInputBlocked(false);
                     
-                    if (GameController.instance != null)
+                    try
                     {
-                        GameController.instance.ControlsEnabled(this.gameObject);
+                        if (ThirdPersonCameraController.instance != null)
+                        {
+                            ThirdPersonCameraController.instance.menuEnabled = _prevMenuEnabled;
+                        }
                     }
+                    catch { }
+                    
+                    try
+                    {
+                        if (GameController.instance != null)
+                        {
+                            GameController.instance.ChangeCursorStatus((CursorLockMode)1, visible: false);
+                        }
+                    }
+                    catch { }
+
+
                     
                     if (Patches.cacheLoaded)
                     {
@@ -63,6 +170,7 @@ namespace ObenseuerQualityOfLife
         }
 
         private int _currentTab = 0;
+        private bool _sortByDistance = false;
         private string[] _tabs = new string[] { "Prices", "Shops & Doors" };
         private UnityEngine.Vector2 _scrollPosition = UnityEngine.Vector2.zero;
 
@@ -102,10 +210,13 @@ namespace ObenseuerQualityOfLife
             }
             else if (_currentTab == 1)
             {
+                _sortByDistance = GUILayout.Toggle(_sortByDistance, "Sort by distance (updates every game minute)");
+
                 GUILayout.BeginHorizontal();
                 GUILayout.Label("Show", GUILayout.Width(35));
                 GUILayout.Label("Original Name", GUILayout.Width(170));
                 GUILayout.Label("Custom Name", GUILayout.Width(170));
+                GUILayout.Label("Dist", GUILayout.Width(55));
                 GUILayout.Label("Mo", GUILayout.Width(45));
                 GUILayout.Label("Tu", GUILayout.Width(45));
                 GUILayout.Label("We", GUILayout.Width(45));
@@ -130,9 +241,24 @@ namespace ObenseuerQualityOfLife
                     GUILayout.Space(10);
                     GUILayout.Label($"=== {scene} ===");
                     
+                    var entries = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, Patches.ShopSchedule>>();
                     foreach (var kvp in Patches.knownShops)
                     {
-                        if (kvp.Value.sceneName == scene)
+                        if (kvp.Value.sceneName == scene) entries.Add(kvp);
+                    }
+                    if (_sortByDistance)
+                    {
+                        // Объекты без расстояния (не в текущей сцене) — в конец
+                        entries.Sort((a, b) =>
+                        {
+                            float da = a.Value.distance < 0f ? float.MaxValue : a.Value.distance;
+                            float db = b.Value.distance < 0f ? float.MaxValue : b.Value.distance;
+                            return da.CompareTo(db);
+                        });
+                    }
+
+                    foreach (var kvp in entries)
+                    {
                         {
                             GUILayout.BeginHorizontal();
                             
@@ -141,6 +267,8 @@ namespace ObenseuerQualityOfLife
                             GUILayout.Label(kvp.Key, GUILayout.Width(170));
                             
                             kvp.Value.customName = GUILayout.TextField(kvp.Value.customName, GUILayout.Width(170));
+                            
+                            GUILayout.Label(kvp.Value.distance < 0f ? "-" : $"{kvp.Value.distance:F0} m", GUILayout.Width(55));
                             
                             GUILayout.Label(kvp.Value.GetDayString(0), GUILayout.Width(45));
                             GUILayout.Label(kvp.Value.GetDayString(1), GUILayout.Width(45));
