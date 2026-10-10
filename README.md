@@ -15,7 +15,16 @@ A lightweight BepInEx mod for **Obenseuer** that adds essential UI improvements 
   * Fixes recipe notifications, clearly displays learned recipes, and shows restock times in shops.
 * ⚙️ **In-Game Menu (`F4`)**: Configure price thresholds, toggle technical Item IDs, and manage custom door names on the fly.
 
+1) ![alt text](https://github.com/lvPokka/ObenseuerQualityOfLife/blob/main/screenshots/1.png "Example 1")
+2) ![alt text](https://github.com/lvPokka/ObenseuerQualityOfLife/blob/main/screenshots/2.png "Example 2")
+3) ![alt text](https://github.com/lvPokka/ObenseuerQualityOfLife/blob/main/screenshots/3.png "Example 3")
+4) ![alt text](https://github.com/lvPokka/ObenseuerQualityOfLife/blob/main/screenshots/4.png "Example 4")
+5) ![alt text](https://github.com/lvPokka/ObenseuerQualityOfLife/blob/main/screenshots/5.png "Example 5")
+6) ![alt text](https://github.com/lvPokka/ObenseuerQualityOfLife/blob/main/screenshots/6.png "Example 6")
+7) ![alt text](https://github.com/lvPokka/ObenseuerQualityOfLife/blob/main/screenshots/7.png "Example 7")
+
 ## 🛠️ Installation
 
 1. Install [BepInEx (x64)] 6.0.0-pre.2 (https://github.com/BepInEx/BepInEx).
 2. Place `ObenseuerQualityOfLife.dll` into the `Obenseuer/BepInEx/plugins` folder.
+
