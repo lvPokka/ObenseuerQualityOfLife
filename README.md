@@ -1,9 +1,19 @@
-# ObenseuerQualityOfLife
+# Obenseuer Quality of Life (QoL) Mod
 
-Patch list:
-1) Restock time for each seller
-2) Display shop opening hours on screen
-3) Display item price with a customizable color
-4) Display the number of learned recipes
-5) Add a Drop button to the inventory that moves all items already present in inventory to the storage
-6) Left Alt + Double-click on an item to move all items of the same type to storage
+A lightweight BepInEx mod for **Obenseuer** that adds essential UI improvements and inventory management features.
+
+## ✨ Features
+
+* 💰 **Dynamic Price Highlighting (`F2`)**: Color-codes inventory items (Green, Blue, Red) based on their value. Thresholds are configurable.
+* 🏪 **Shop Schedule Tracker (`F3`)**: Displays a sortable list of all shops/doors, their opening days, and distance.
+* ⚡ **Fast Inventory**: 
+  * **Quick Stack ("Drop"):** Automatically moves matching items from your inventory into open storage.
+  * **Fast Move:** `Left Alt + Double Click` to instantly transfer items between inventory and storage/trade windows.
+* 🌾 **Harvesting Fixes**: Click directly on tiles to harvest. Prevents healthy vines from being accidentally uprooted.
+* 📖 **UI Enhancements**: Fixes recipe notifications, clearly displays learned recipes, and shows restock times in shops.
+* ⚙️ **In-Game Menu (`F4`)**: Configure price thresholds, toggle technical Item IDs, and manage custom door names on the fly.
+
+## 🛠️ Installation
+
+1. Install [BepInEx (x64)](https://github.com/BepInEx/BepInEx).
+2. Place `ObenseuerQualityOfLife.dll` into the `Obenseuer/BepInEx/plugins` folder.

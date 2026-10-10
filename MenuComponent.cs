@@ -1,8 +1,24 @@
-using UnityEngine;
 using BepInEx.Configuration;
+using HarmonyLib;
+using ObenseuerQualityOfLife.PatchList;
+using UnityEngine;
 
 namespace ObenseuerQualityOfLife
 {
+    [HarmonyPatch(typeof(ECM.Components.MouseLook), "LookRotation")]
+    public static class MouseLook_Patch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            if (MenuComponent.IsMenuOpen)
+            {
+                return false;
+            }
+            return true;
+        }
+    }
+
     public class MenuComponent : MonoBehaviour
     {
         private bool _show = false;
@@ -88,28 +104,29 @@ namespace ObenseuerQualityOfLife
             redText = Plugin.MinRedPrice.Value.ToString();
         }
 
-        private void Update()
+        public static MenuComponent Instance;
+        private void Awake() { Instance = this; }
+
+        public void ToggleMenu()
         {
-            if (Input.GetKeyDown(KeyCode.F4))
-            {
                 _show = !_show;
                 IsMenuOpen = _show;
                 if (_show)
                 {
-                    if (!Patches.cacheLoaded)
+                    if (!ShopWorktimeUI.cacheLoaded)
                     {
-                        Patches.LoadCache();
-                        Patches.cacheLoaded = true;
+                        ShopWorktimeUI.LoadCache();
+                        ShopWorktimeUI.cacheLoaded = true;
                     }
-                    
+
                     _prevLock = Cursor.lockState;
                     _prevVisible = Cursor.visible;
                     _savedCursor = true;
                     Cursor.lockState = (CursorLockMode)0;
                     Cursor.visible = true;
                     SetGameInputBlocked(true);
-                    Patches.UpdateDistances(true);
-                    
+                    ShopWorktimeUI.UpdateDistances(true);
+
                     try
                     {
                         if (GameController.instance != null)
@@ -118,7 +135,7 @@ namespace ObenseuerQualityOfLife
                         }
                     }
                     catch { }
-                    
+
                     try
                     {
                         if (ThirdPersonCameraController.instance != null)
@@ -130,7 +147,7 @@ namespace ObenseuerQualityOfLife
                     catch { }
 
 
-                    
+
                     // Обновляем текст из конфига при открытии меню
                     greenText = Plugin.MinGreenPrice.Value.ToString();
                     blueText = Plugin.MinBluePrice.Value.ToString();
@@ -140,7 +157,7 @@ namespace ObenseuerQualityOfLife
                 {
                     RestoreCursor();
                     SetGameInputBlocked(false);
-                    
+
                     try
                     {
                         if (ThirdPersonCameraController.instance != null)
@@ -149,7 +166,7 @@ namespace ObenseuerQualityOfLife
                         }
                     }
                     catch { }
-                    
+
                     try
                     {
                         if (GameController.instance != null)
@@ -160,13 +177,12 @@ namespace ObenseuerQualityOfLife
                     catch { }
 
 
-                    
-                    if (Patches.cacheLoaded)
+
+                    if (ShopWorktimeUI.cacheLoaded)
                     {
-                        Patches.SaveCache();
+                        ShopWorktimeUI.SaveCache();
                     }
                 }
-            }
         }
 
         private int _currentTab = 0;
@@ -177,7 +193,7 @@ namespace ObenseuerQualityOfLife
         private void OnGUI()
         {
             if (!_show) return;
-            
+
             // Используем стандартный стиль окна Unity
             _rect = GUI.Window(1024, _rect, WindowRoutine, "ObenseuerQualityOfLife");
         }
@@ -228,7 +244,7 @@ namespace ObenseuerQualityOfLife
 
                 _scrollPosition = GUILayout.BeginScrollView(_scrollPosition);
                 System.Collections.Generic.List<string> scenes = new System.Collections.Generic.List<string>();
-                foreach (var kvp in Patches.knownShops)
+                foreach (var kvp in ShopWorktimeUI.knownShops)
                 {
                     if (!scenes.Contains(kvp.Value.sceneName))
                     {
@@ -240,9 +256,9 @@ namespace ObenseuerQualityOfLife
                 {
                     GUILayout.Space(10);
                     GUILayout.Label($"=== {scene} ===");
-                    
-                    var entries = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, Patches.ShopSchedule>>();
-                    foreach (var kvp in Patches.knownShops)
+
+                    var entries = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, ShopWorktimeUI.ShopSchedule>>();
+                    foreach (var kvp in ShopWorktimeUI.knownShops)
                     {
                         if (kvp.Value.sceneName == scene) entries.Add(kvp);
                     }
@@ -261,15 +277,15 @@ namespace ObenseuerQualityOfLife
                     {
                         {
                             GUILayout.BeginHorizontal();
-                            
+
                             kvp.Value.isVisible = GUILayout.Toggle(kvp.Value.isVisible, "", GUILayout.Width(35));
-                            
+
                             GUILayout.Label(kvp.Key, GUILayout.Width(170));
-                            
+
                             kvp.Value.customName = GUILayout.TextField(kvp.Value.customName, GUILayout.Width(170));
-                            
+
                             GUILayout.Label(kvp.Value.distance < 0f ? "-" : $"{kvp.Value.distance:F0} m", GUILayout.Width(55));
-                            
+
                             GUILayout.Label(kvp.Value.GetDayString(0), GUILayout.Width(45));
                             GUILayout.Label(kvp.Value.GetDayString(1), GUILayout.Width(45));
                             GUILayout.Label(kvp.Value.GetDayString(2), GUILayout.Width(45));
@@ -277,7 +293,7 @@ namespace ObenseuerQualityOfLife
                             GUILayout.Label(kvp.Value.GetDayString(4), GUILayout.Width(45));
                             GUILayout.Label(kvp.Value.GetDayString(5), GUILayout.Width(45));
                             GUILayout.Label(kvp.Value.GetDayString(6), GUILayout.Width(45));
-                            
+
                             GUILayout.EndHorizontal();
                         }
                     }
@@ -292,9 +308,9 @@ namespace ObenseuerQualityOfLife
                 if (float.TryParse(greenText, out float g)) Plugin.MinGreenPrice.Value = g;
                 if (float.TryParse(blueText, out float b)) Plugin.MinBluePrice.Value = b;
                 if (float.TryParse(redText, out float r)) Plugin.MinRedPrice.Value = r;
-                
+
                 Plugin.Instance.Config.Save();
-                
+
                 // Моментально обновляем предметы
                 ItemData[] allItems = FindObjectsByType<ItemData>(FindObjectsSortMode.None);
                 foreach (ItemData item in allItems)
